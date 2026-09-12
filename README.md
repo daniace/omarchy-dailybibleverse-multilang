@@ -24,6 +24,18 @@ language/version pickers built in.
   Midvash's `/v1/votd` endpoint works); the widget re-checks every 5
   minutes and refetches once the day rolls over.
 
+## Screenshots
+
+In the bar:
+
+![Bar pill showing the day's reference](screenshots/bar.png)
+
+Opened:
+
+![Popup open, showing the date, reference, verse text, language/version pickers, and footer](screenshots/popup.png)
+
+(Both taken on the Lumon theme — the card re-colors to match whichever theme you have active.)
+
 ## Interactions
 
 | Bar pill | Popup |
