@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.daniace.bibleverse",
+  "name": "Bible Verse",
+  "version": "0.1.0",
+  "author": "daniace",
+  "description": "Daily Bible verse pill with a terminal-style popup, powered by the free Midvash API. Shows the verse in Spanish by default, or your system language.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Bible Verse",
+    "description": "Verse of the day pill with a detail popup",
+    "category": "Info",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
