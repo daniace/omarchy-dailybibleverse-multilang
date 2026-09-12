@@ -78,14 +78,32 @@ either — `omarchy restart shell` is the reliable one.)
 
 - Omarchy with the Quickshell-based shell (`omarchy-shell`) — the plugin
   system this README describes.
-- `curl` — fetches verses from the Midvash API (present on any Omarchy
-  install).
-- `wl-clipboard` (`wl-copy`) — used by the `COPY` action. Present by
-  default on Omarchy.
-- An `xdg-open`-compatible opener (from `xdg-utils`) — used by the `OPEN`
-  action. Present by default on Omarchy.
+- `curl` at `/usr/bin/curl` — fetches verses from the Midvash API (present
+  on any Omarchy install).
+- `wl-clipboard` (`/usr/bin/wl-copy`) — used by the `COPY` action.
+- An `xdg-open`-compatible opener (`/usr/bin/xdg-open`, from `xdg-utils`) —
+  used by the `OPEN` action.
+- `coreutils` (`/usr/bin/timeout`) — bounds the `COPY`/`OPEN` actions to a
+  hard 5-second deadline.
 
-No API key, account, or network access beyond `api.midvash.com` is needed.
+All four are present by default on Omarchy and are invoked at these fixed
+paths, never resolved through `PATH`. No API key, account, or network
+access beyond `api.midvash.com` is needed.
+
+## Security notes
+
+- Every fetch runs through one shared, queued process, so at most one
+  `curl` is ever in flight for this plugin — see `Model.curlCommand` /
+  `enqueueFetch` in `Panel.qml`.
+- `curl` runs with `-q` (ignore ambient `~/.curlrc`), `--proto`/`--proto-redir
+  =https` (no scheme downgrade, including on redirect), and bounded
+  `--max-time`/`--max-filesize`/`--limit-rate`, plus a matching response-size
+  gate in `Model.js` before anything is parsed as JSON.
+- The verse's `url` field (used by `OPEN`) is only ever accepted when it's
+  an `https://midvash.com/...` link; anything else is dropped rather than
+  handed to a URL opener.
+- `COPY` and `OPEN` run as fixed-path, argv-only processes (no shell
+  string), wrapped in `timeout` for a hard duration bound.
 
 ## Uninstall
 

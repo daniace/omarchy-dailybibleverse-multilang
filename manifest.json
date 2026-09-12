@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.daniace.dailybibleverse-multilang",
   "name": "Daily Bible Verse (Multi-language)",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "daniace",
   "description": "Daily Bible verse bar widget with a theme-matched popup, powered by the free Midvash API. Shows the verse in Spanish by default, or your system language, with pickers to switch language and Bible version on the fly.",
   "kinds": [

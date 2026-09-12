@@ -85,7 +85,47 @@ Panel {
     return false
   }
 
-  // ---- Fetch chain: votd -> localized book name + version attribution --
+  // ---- Fetch chain: one Process, one request at a time -------------------
+  //
+  // Every fetch goes through this single queue instead of several
+  // concurrent Process items: only one curl is ever running for this
+  // plugin, which bounds concurrent-request exposure by construction
+  // rather than by convention.
+  property var fetchQueue: []
+  property bool fetchBusy: false
+
+  function enqueueFetch(url, timeoutSeconds, onDone) {
+    fetchQueue.push({ url: url, timeoutSeconds: timeoutSeconds, onDone: onDone })
+    processFetchQueue()
+  }
+
+  function processFetchQueue() {
+    if (fetchBusy || fetchQueue.length === 0) return
+    var job = fetchQueue.shift()
+    fetchBusy = true
+    fetchProc.onDone = job.onDone
+    fetchProc.command = Model.curlCommand(job.url, job.timeoutSeconds)
+    fetchProc.running = true
+  }
+
+  // Fixed, verified curl binary + argv only (see Model.curlCommand): no
+  // shell, no PATH lookup, no ambient curl config, HTTPS-only including
+  // redirects, and bounded time/rate/declared size.
+  Process {
+    id: fetchProc
+    property var onDone: null
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var cb = fetchProc.onDone
+        fetchProc.onDone = null
+        root.fetchBusy = false
+        if (cb) cb(text)
+        Qt.callLater(root.processFetchQueue)
+      }
+    }
+  }
+
   function refresh() {
     retries = 0
     errorMessage = ""
@@ -93,11 +133,54 @@ Panel {
   }
 
   function startVotdFetch() {
-    if (votdProc.running) return
     loading = true
     var url = "https://api.midvash.com/v1/votd?version=" + encodeURIComponent(root.version)
-    votdProc.command = ["curl", "-fsS", "--max-time", "8", url]
-    votdProc.running = true
+    enqueueFetch(url, 8, function(text) {
+      var parsed = Model.parseVotd(text)
+      if (!parsed) {
+        root.scheduleVotdRetry()
+        return
+      }
+      root.loading = false
+      root.errorMessage = ""
+      root.retries = 0
+      root.loadedDayKey = Model.utcDayKey(new Date())
+      root.verseText = parsed.text
+      root.verseUrl = parsed.url
+      root.bookSlug = parsed.bookSlug
+      root.chapter = parsed.chapter
+      root.verseStart = parsed.verseStart
+      root.verseEnd = parsed.verseEnd
+      root.resolvedVersion = parsed.version || root.version
+
+      if (root.bookSlug) root.fetchBookName(root.bookSlug, root.language)
+      if (root.resolvedVersion) root.fetchVersionMeta(root.resolvedVersion)
+    })
+  }
+
+  function fetchBookName(bookSlug, language) {
+    var url = "https://api.midvash.com/v1/books/" + encodeURIComponent(bookSlug)
+    enqueueFetch(url, 8, function(text) {
+      root.bookName = Model.parseBookName(text, language, bookSlug)
+    })
+  }
+
+  function fetchVersionMeta(version) {
+    var url = "https://api.midvash.com/v1/versions/" + encodeURIComponent(version)
+    enqueueFetch(url, 8, function(text) {
+      var meta = Model.parseVersionMeta(text)
+      if (meta) {
+        root.versionShortName = meta.shortName
+        root.attribution = meta.attribution
+      }
+    })
+  }
+
+  function fetchVersionsList() {
+    enqueueFetch("https://api.midvash.com/v1/versions", 8, function(text) {
+      var list = Model.parseVersionsList(text)
+      if (list.length) root.versionsList = list
+    })
   }
 
   function scheduleVotdRetry() {
@@ -110,68 +193,10 @@ Panel {
     retryTimer.restart()
   }
 
-  Process {
-    id: votdProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var parsed = Model.parseVotd(text)
-        if (!parsed) {
-          root.scheduleVotdRetry()
-          return
-        }
-        root.loading = false
-        root.errorMessage = ""
-        root.retries = 0
-        root.loadedDayKey = Model.utcDayKey(new Date())
-        root.verseText = parsed.text
-        root.verseUrl = parsed.url
-        root.bookSlug = parsed.bookSlug
-        root.chapter = parsed.chapter
-        root.verseStart = parsed.verseStart
-        root.verseEnd = parsed.verseEnd
-        root.resolvedVersion = parsed.version || root.version
-
-        if (root.bookSlug) {
-          bookProc.command = ["curl", "-fsS", "--max-time", "8", "https://api.midvash.com/v1/books/" + encodeURIComponent(root.bookSlug)]
-          bookProc.running = true
-        }
-        if (root.resolvedVersion) {
-          versionMetaProc.command = ["curl", "-fsS", "--max-time", "8", "https://api.midvash.com/v1/versions/" + encodeURIComponent(root.resolvedVersion)]
-          versionMetaProc.running = true
-        }
-      }
-    }
-  }
-
   Timer {
     id: retryTimer
     interval: 3000
     onTriggered: root.startVotdFetch()
-  }
-
-  Process {
-    id: bookProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        root.bookName = Model.parseBookName(text, root.language, root.bookSlug)
-      }
-    }
-  }
-
-  Process {
-    id: versionMetaProc
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var meta = Model.parseVersionMeta(text)
-        if (meta) {
-          root.versionShortName = meta.shortName
-          root.attribution = meta.attribution
-        }
-      }
-    }
   }
 
   // Re-fetch once the UTC day rolls over; otherwise the same verse simply
@@ -185,33 +210,33 @@ Panel {
 
   Component.onCompleted: {
     refresh()
-    versionsListProc.running = true
-  }
-
-  Process {
-    id: versionsListProc
-    command: ["curl", "-fsS", "--max-time", "8", "https://api.midvash.com/v1/versions"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var list = Model.parseVersionsList(text)
-        if (list.length) root.versionsList = list
-      }
-    }
+    fetchVersionsList()
   }
 
   // ---- Actions -----------------------------------------------------------
+  //
+  // Fixed, verified binaries invoked as plain argv (no shell string to
+  // interpret, so no escaping concerns regardless of verse content),
+  // wrapped in `timeout` for a hard duration bound.
   function copyVerse() {
-    if (!root.verseText) return
+    if (!root.verseText || copyProc.running) return
     var payload = root.verseText + " — " + root.reference
     if (root.versionShortName) payload += " (" + root.versionShortName + ")"
-    if (root.bar) root.bar.run("wl-copy " + Model.shellQuote(payload))
+    copyProc.command = [Model.TIMEOUT_BIN, "-k", "1", "5", Model.WL_COPY_BIN, payload]
+    copyProc.running = true
   }
 
   function openSource() {
-    if (!root.verseUrl || !root.bar) return
-    root.bar.run("xdg-open " + Model.shellQuote(root.verseUrl))
+    // Re-checked here, not just at parse time: never launch a URL opener
+    // on anything but an https://midvash.com/... link, no matter how
+    // verseUrl got set.
+    if (!root.verseUrl || !Model.isAllowedVerseUrl(root.verseUrl) || openProc.running) return
+    openProc.command = [Model.TIMEOUT_BIN, "-k", "1", "5", Model.XDG_OPEN_BIN, root.verseUrl]
+    openProc.running = true
   }
+
+  Process { id: copyProc }
+  Process { id: openProc }
 
   // Persist a settings patch into this widget's shell.json bar entry (same
   // mechanism omarchy.clock uses for cycleFormat), applied locally first so
@@ -459,7 +484,7 @@ Panel {
 
           Text {
             anchors.right: parent.right
-            text: "v0.2.0"
+            text: "v0.3.0"
             color: Qt.darker(root.contentForeground, 1.4)
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.bodySmall

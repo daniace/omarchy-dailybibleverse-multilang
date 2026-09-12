@@ -45,6 +45,63 @@ var LANGUAGES = {
 
 var DEFAULT_LANGUAGE = "es"
 
+// ---- Network/process hardening -------------------------------------
+//
+// Fixed, symlink-resolved executable paths ("verified executable
+// identity") — every Process this plugin runs uses one of these, never a
+// bare command name resolved through PATH. If a path doesn't exist on a
+// given system the Process simply fails to start; there is no fallback
+// search.
+var CURL_BIN = "/usr/bin/curl"
+var WL_COPY_BIN = "/usr/bin/wl-copy"
+var XDG_OPEN_BIN = "/usr/bin/xdg-open"
+var TIMEOUT_BIN = "/usr/bin/timeout"
+
+// Every fetch response is fully buffered in memory by Quickshell's
+// StdioCollector before we ever see it, so the real cap has to be enforced
+// in the curl invocation itself, not after: curl's own --max-filesize is
+// documented to have no effect on a transfer whose length isn't known in
+// advance (e.g. chunked encoding), so it's paired with --limit-rate +
+// --max-time, which bounds total bytes (rate × time) regardless of how
+// the response is framed. MAX_RESPONSE_CHARS is a second, much tighter
+// gate applied in JS before JSON.parse — these are small, flat API
+// responses that are normally a few KB.
+var MAX_RESPONSE_BYTES = 1048576      // 1 MiB — --max-filesize
+var MAX_DOWNLOAD_RATE_BPS = 262144    // 256 KiB/s — --limit-rate
+var MAX_RESPONSE_CHARS = 262144       // ~256 KB of JSON text we'll ever parse
+var MAX_VERSE_TEXT_CHARS = 20000      // a verse/chapter is never remotely this long
+var MAX_VERSIONS_ROWS = 1000          // sanity cap on the /v1/versions array
+
+// A hardened curl invocation: fixed binary, no ambient curl config (-q
+// must be the first argument to have effect), HTTPS-only including across
+// any redirect, and bounded time + rate + declared size.
+function curlCommand(url, maxTimeSeconds) {
+  return [
+    CURL_BIN,
+    "-q",
+    "--proto", "=https",
+    "--proto-redir", "=https",
+    "-fsS",
+    "--max-time", String(maxTimeSeconds),
+    "--max-filesize", String(MAX_RESPONSE_BYTES),
+    "--limit-rate", String(MAX_DOWNLOAD_RATE_BPS),
+    String(url)
+  ]
+}
+
+// Reject oversized responses before they're ever handed to JSON.parse.
+function withinResponseLimit(raw) {
+  return typeof raw === "string" && raw.length > 0 && raw.length <= MAX_RESPONSE_CHARS
+}
+
+// Only ever hand xdg-open a same-host, https verse URL from Midvash —
+// `data.url` in the votd/passage response is API-controlled, and passing
+// an arbitrary scheme/host straight to a URL opener would let a
+// compromised or malicious response invoke local or custom URL handlers.
+function isAllowedVerseUrl(url) {
+  return /^https:\/\/midvash\.com\//i.test(String(url || ""))
+}
+
 // Native display names for the language picker.
 var LANGUAGE_LABELS = {
   "es": "Español", "en": "English", "pt-br": "Português (Brasil)",
@@ -151,11 +208,14 @@ function utcDayKey(date) {
 }
 
 // GET /v1/votd response -> a flat verse object, or null on anything
-// unexpected.
+// unexpected (including "too big to be a real response").
 function parseVotd(raw) {
+  if (!withinResponseLimit(raw)) return null
   try {
-    var data = JSON.parse(String(raw || ""))
+    var data = JSON.parse(raw)
     if (!data || typeof data.text !== "string" || !data.text) return null
+    if (data.text.length > MAX_VERSE_TEXT_CHARS) return null
+    var url = String(data.url || "")
     return {
       text: data.text,
       version: String(data.version || ""),
@@ -163,7 +223,9 @@ function parseVotd(raw) {
       chapter: data.chapter,
       verseStart: data.verse_start,
       verseEnd: data.verse_end,
-      url: String(data.url || "")
+      // Blanked rather than passed through when it doesn't match the
+      // expected host/scheme — see isAllowedVerseUrl().
+      url: isAllowedVerseUrl(url) ? url : ""
     }
   } catch (e) {
     return null
@@ -173,8 +235,9 @@ function parseVotd(raw) {
 // GET /v1/books/{slug} response -> localized display name for `language`,
 // falling back to English, then to the raw slug.
 function parseBookName(raw, language, fallbackSlug) {
+  if (!withinResponseLimit(raw)) return fallbackSlug || ""
   try {
-    var data = JSON.parse(String(raw || "")).data
+    var data = JSON.parse(raw).data
     var names = data && data.name
     if (names && typeof names === "object") {
       if (typeof names[language] === "string" && names[language]) return names[language]
@@ -192,8 +255,9 @@ function parseBookName(raw, language, fallbackSlug) {
 // the concise, accurate credit line — never assume "public domain" for a
 // version whose copyright says otherwise.
 function parseVersionMeta(raw) {
+  if (!withinResponseLimit(raw)) return null
   try {
-    var data = JSON.parse(String(raw || "")).data
+    var data = JSON.parse(raw).data
     if (!data) return null
     var lines = String(data.copyright || "").split("\n").map(function(l) { return l.replace(/^\s+|\s+$/g, "") }).filter(Boolean)
     return {
@@ -230,10 +294,11 @@ function languageOptions() {
 // GET /v1/versions response -> a flat array of { slug, shortName, name,
 // language }, for filtering into per-language version options.
 function parseVersionsList(raw) {
+  if (!withinResponseLimit(raw)) return []
   try {
-    var rows = JSON.parse(String(raw || "")).data
+    var rows = JSON.parse(raw).data
     if (!Array.isArray(rows)) return []
-    return rows.map(function(v) {
+    return rows.slice(0, MAX_VERSIONS_ROWS).map(function(v) {
       return {
         slug: String(v.slug || ""),
         shortName: String(v.shortName || v.slug || "").toUpperCase(),
@@ -256,17 +321,18 @@ function versionOptionsForLanguage(list, language) {
   })
 }
 
-// Single-quote a string for safe use inside a `bar.run("...")` shell
-// command (wraps in '...', escaping embedded single quotes).
-function shellQuote(value) {
-  return "'" + String(value == null ? "" : value).replace(/'/g, "'\\''") + "'"
-}
-
 if (typeof module !== "undefined") {
   module.exports = {
     LANGUAGES: LANGUAGES,
     DEFAULT_LANGUAGE: DEFAULT_LANGUAGE,
     LANGUAGE_LABELS: LANGUAGE_LABELS,
+    CURL_BIN: CURL_BIN,
+    WL_COPY_BIN: WL_COPY_BIN,
+    XDG_OPEN_BIN: XDG_OPEN_BIN,
+    TIMEOUT_BIN: TIMEOUT_BIN,
+    curlCommand: curlCommand,
+    withinResponseLimit: withinResponseLimit,
+    isAllowedVerseUrl: isAllowedVerseUrl,
     normalizeLanguage: normalizeLanguage,
     resolveLanguage: resolveLanguage,
     resolveVersion: resolveVersion,
@@ -281,7 +347,6 @@ if (typeof module !== "undefined") {
     buildReference: buildReference,
     languageOptions: languageOptions,
     parseVersionsList: parseVersionsList,
-    versionOptionsForLanguage: versionOptionsForLanguage,
-    shellQuote: shellQuote
+    versionOptionsForLanguage: versionOptionsForLanguage
   }
 }
