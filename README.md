@@ -62,6 +62,30 @@ omarchy restart shell
 but doesn't reliably force a code reload for an already-loaded plugin
 either — `omarchy restart shell` is the reliable one.)
 
+## Requirements
+
+- Omarchy with the Quickshell-based shell (`omarchy-shell`) — the plugin
+  system this README describes.
+- `curl` — fetches verses from the Midvash API (present on any Omarchy
+  install).
+- `wl-clipboard` (`wl-copy`) — used by the `COPY` action. Present by
+  default on Omarchy.
+- An `xdg-open`-compatible opener (from `xdg-utils`) — used by the `OPEN`
+  action. Present by default on Omarchy.
+
+No API key, account, or network access beyond `api.midvash.com` is needed.
+
+## Uninstall
+
+```bash
+omarchy plugin disable io.github.daniace.dailybibleverse-multilang
+rm ~/.config/omarchy/plugins/io.github.daniace.dailybibleverse-multilang   # if it's a symlink
+# or: rm -r ~/.config/omarchy/plugins/io.github.daniace.dailybibleverse-multilang   # if it's a copy
+```
+
+This only removes the plugin and its `shell.json` bar entry (via `disable`);
+it doesn't touch anything outside `~/.config/omarchy/`.
+
 ## Settings
 
 There's no dedicated settings form (that's a first-party-only feature of the
