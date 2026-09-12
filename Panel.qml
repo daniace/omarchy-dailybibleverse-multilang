@@ -12,8 +12,8 @@ import "Model.js" as Model
 // panel (weather, clock, network, ...).
 Panel {
   id: root
-  moduleName: "io.github.daniace.bibleverse"
-  ipcTarget: "io.github.daniace.bibleverse"
+  moduleName: "io.github.daniace.dailybibleverse-multilang"
+  ipcTarget: "io.github.daniace.dailybibleverse-multilang"
   manageIpc: false
 
   property var anchorItem: null
@@ -26,7 +26,7 @@ Panel {
 
   // ---- Language & version resolution --------------------------------
   // "language"/"version" settings accept "auto" (default) or an explicit
-  // override, e.g. { "id": "io.github.daniace.bibleverse", "version": "nvies" }.
+  // override, e.g. { "id": "io.github.daniace.dailybibleverse-multilang", "version": "nvies" }.
   readonly property string languageOverride: setting("language", "auto")
   readonly property string versionOverride: setting("version", "auto")
   readonly property string language: Model.resolveLanguage(languageOverride, Qt.locale().name)
@@ -459,7 +459,7 @@ Panel {
 
           Text {
             anchors.right: parent.right
-            text: "v0.1.0"
+            text: "v0.2.0"
             color: Qt.darker(root.contentForeground, 1.4)
             font.family: root.contentFontFamily
             font.pixelSize: Style.font.bodySmall

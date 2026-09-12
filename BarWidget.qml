@@ -7,7 +7,7 @@ import qs.Ui
 // omarchy.weather / omarchy.clock bar-widget + nested-panel contract.
 BarWidget {
   id: root
-  moduleName: "io.github.daniace.bibleverse"
+  moduleName: "io.github.daniace.dailybibleverse-multilang"
 
   function injectPanel() {
     var target = panelLoader.item

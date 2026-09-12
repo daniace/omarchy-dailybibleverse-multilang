@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "id": "io.github.daniace.bibleverse",
-  "name": "Bible Verse",
-  "version": "0.1.0",
+  "id": "io.github.daniace.dailybibleverse-multilang",
+  "name": "Daily Bible Verse (Multi-language)",
+  "version": "0.2.0",
   "author": "daniace",
-  "description": "Daily Bible verse pill with a terminal-style popup, powered by the free Midvash API. Shows the verse in Spanish by default, or your system language.",
+  "description": "Daily Bible verse bar widget with a theme-matched popup, powered by the free Midvash API. Shows the verse in Spanish by default, or your system language, with pickers to switch language and Bible version on the fly.",
   "kinds": [
     "bar-widget"
   ],
@@ -12,8 +12,8 @@
     "barWidget": "BarWidget.qml"
   },
   "barWidget": {
-    "displayName": "Bible Verse",
-    "description": "Verse of the day pill with a detail popup",
+    "displayName": "Daily Bible Verse",
+    "description": "Verse of the day pill with a popup: language + version pickers, copy, and open on midvash.com",
     "category": "Info",
     "allowMultiple": false,
     "defaultSection": "right"
