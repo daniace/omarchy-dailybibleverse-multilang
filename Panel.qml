@@ -5,9 +5,11 @@ import qs.Commons
 import qs.Ui
 import "Model.js" as Model
 
-// Verse-of-the-day popup: a self-contained "terminal card" look (own dark
-// palette + neon border) rather than the system theme, by design — this is
-// meant to read the same regardless of which Omarchy theme is active.
+// Verse-of-the-day popup: a compact, monospace "card" layout (uppercase
+// section label, hairline separators, small-caps footer) built entirely
+// from the shell's live theme tokens (Color.*/Style.*), so it re-colors
+// with whichever Omarchy theme is active — same as every first-party
+// panel (weather, clock, network, ...).
 Panel {
   id: root
   moduleName: "io.github.daniace.bibleverse"
@@ -47,6 +49,12 @@ Panel {
   property bool loading: false
   property string errorMessage: ""
   property int retries: 0
+
+  // Full /v1/versions catalogue (fetched once), filtered per language for
+  // the version picker.
+  property var versionsList: []
+  readonly property var languageOptions: Model.languageOptions()
+  readonly property var versionOptions: Model.versionOptionsForLanguage(root.versionsList, root.language)
 
   readonly property string reference: Model.buildReference(bookName, chapter, verseStart, verseEnd)
   // Short label for the bar pill: falls back through loading/error states
@@ -175,7 +183,22 @@ Panel {
     onTriggered: if (Model.utcDayKey(new Date()) !== root.loadedDayKey) root.refresh()
   }
 
-  Component.onCompleted: refresh()
+  Component.onCompleted: {
+    refresh()
+    versionsListProc.running = true
+  }
+
+  Process {
+    id: versionsListProc
+    command: ["curl", "-fsS", "--max-time", "8", "https://api.midvash.com/v1/versions"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var list = Model.parseVersionsList(text)
+        if (list.length) root.versionsList = list
+      }
+    }
+  }
 
   // ---- Actions -----------------------------------------------------------
   function copyVerse() {
@@ -190,6 +213,42 @@ Panel {
     root.bar.run("xdg-open " + Model.shellQuote(root.verseUrl))
   }
 
+  // Persist a settings patch into this widget's shell.json bar entry (same
+  // mechanism omarchy.clock uses for cycleFormat), applied locally first so
+  // the UI updates immediately rather than waiting on the file round-trip.
+  function persistSettings(patch) {
+    var entry = { id: root.moduleName }
+    for (var key in root.settings) if (key !== "id") entry[key] = root.settings[key]
+    for (var patchKey in patch) entry[patchKey] = patch[patchKey]
+    root.settings = entry
+    if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
+      root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  // Switching language resets the version to that language's default —
+  // the previous version slug almost never exists in the new language.
+  function setLanguage(code) {
+    if (!code || code === root.languageOverride) return
+    persistSettings({ language: code, version: "auto" })
+    refresh()
+  }
+
+  function setVersion(slug) {
+    if (!slug || slug === root.version) return
+    persistSettings({ version: slug })
+    refresh()
+  }
+
+  // The language/version Dropdowns own their `value` after the first user
+  // selection (Dropdown assigns it internally on pick), so an external
+  // change — e.g. picking a language, which resets the resolved version —
+  // needs to be pushed back in explicitly to keep both in sync.
+  Connections {
+    target: root
+    function onLanguageChanged() { languageDropdown.value = root.language }
+    function onVersionChanged() { versionDropdown.value = root.version }
+  }
+
   IpcHandler {
     target: root.ipcTarget
 
@@ -201,23 +260,8 @@ Panel {
     function refresh(): void { root.refresh() }
   }
 
-  // ---- Palette: a fixed "terminal card" look, independent of the active
-  //      Omarchy theme, matching the plugin's reference design.
-  QtObject {
-    id: palette
-    readonly property color background: "#0b0f1e"
-    readonly property color border: "#4c6ef5"
-    readonly property color heading: "#7d879c"
-    readonly property color date: "#8b93a7"
-    readonly property color reference: "#eef0f6"
-    readonly property color quote: "#c9cfe0"
-    readonly property color separator: "#26304a"
-    readonly property color muted: "#6b7280"
-    readonly property color accent: "#8aa2ff"
-    readonly property color accentHover: "#b9c6ff"
-  }
-
-  readonly property int cardMargin: Style.space(20)
+  readonly property color contentForeground: bar ? bar.foreground : Color.foreground
+  readonly property string contentFontFamily: bar ? bar.fontFamily : Style.font.family
 
   KeyboardPanel {
     id: keyboardPanel
@@ -226,186 +270,199 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    padding: 0
-    borderSpec: Border.flat(palette.border, Math.max(1, Style.space(2)))
     contentWidth: keyboardPanel.fittedContentWidth(Style.space(440))
-    contentHeight: keyboardPanel.fittedContentHeight(cardColumn.implicitHeight + root.cardMargin * 2, Style.space(560))
+    contentHeight: keyboardPanel.fittedContentHeight(cardColumn.implicitHeight, Style.space(600))
 
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      blocked: languageDropdown.popupOpen || versionDropdown.popupOpen
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(t) { if (t === "r" || t === "R") root.refresh() }
 
-      Rectangle {
-        id: cardBackground
-        anchors.fill: parent
-        color: palette.background
-        radius: Style.cornerRadius
+      Column {
+        id: cardColumn
+        width: parent.width
+        spacing: Style.space(12)
 
-        Column {
-          id: cardColumn
-          anchors.fill: parent
-          anchors.margins: root.cardMargin
+        // ---- Header: "VERSE OF THE DAY" + refresh ---------------------
+        Item {
+          width: parent.width
+          height: Math.max(headingText.implicitHeight, refreshButton.implicitHeight)
+
+          PanelSectionHeader {
+            id: headingText
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.strings.heading
+            foreground: root.contentForeground
+            fontFamily: root.contentFontFamily
+          }
+
+          PanelActionButton {
+            id: refreshButton
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            size: Style.space(22)
+            iconText: root.loading ? "…" : "↻"
+            tooltipText: root.strings.refresh
+            foreground: root.contentForeground
+            fontFamily: root.contentFontFamily
+            focusable: true
+            onClicked: root.refresh()
+          }
+        }
+
+        // ---- Date --------------------------------------------------------
+        Text {
+          width: parent.width
+          text: new Date().toLocaleDateString(root.localeObj, Model.dateFormatFor(root.language))
+          color: Qt.darker(root.contentForeground, 1.2)
+          font.family: root.contentFontFamily
+          font.pixelSize: Style.font.bodySmall
+        }
+
+        // ---- Reference -----------------------------------------------------
+        Text {
+          width: parent.width
+          text: root.reference || "…"
+          color: root.contentForeground
+          font.family: root.contentFontFamily
+          font.pixelSize: Style.font.heading
+          font.bold: true
+        }
+
+        // ---- Quote -----------------------------------------------------
+        Text {
+          width: parent.width
+          text: root.errorMessage
+            ? root.errorMessage
+            : (root.verseText ? ("“" + root.verseText + "”") : root.strings.loading)
+          color: root.contentForeground
+          wrapMode: Text.WordWrap
+          font.family: root.contentFontFamily
+          font.pixelSize: Style.font.body
+          lineHeight: 1.3
+        }
+
+        PanelSeparator {
+          foreground: root.contentForeground
+        }
+
+        // ---- Language / version pickers -----------------------------
+        Row {
+          width: parent.width
           spacing: Style.space(10)
 
-          // ---- Header: "VERSE OF THE DAY" + refresh -------------------
-          Item {
-            width: parent.width
-            height: headingText.implicitHeight
+          Dropdown {
+            id: languageDropdown
+            width: (parent.width - parent.spacing) / 2
+            showLabel: false
+            options: root.languageOptions
+            value: root.language
+            foreground: root.contentForeground
+            fontFamily: root.contentFontFamily
+            onChanged: function(v) { root.setLanguage(v) }
+          }
+
+          Dropdown {
+            id: versionDropdown
+            width: (parent.width - parent.spacing) / 2
+            showLabel: false
+            options: root.versionOptions
+            value: root.version
+            foreground: root.contentForeground
+            fontFamily: root.contentFontFamily
+            onChanged: function(v) { root.setVersion(v) }
+          }
+        }
+
+        PanelSeparator {
+          foreground: root.contentForeground
+        }
+
+        // ---- Footer row 1: attribution · COPY / ASK -----------------
+        Item {
+          width: parent.width
+          height: Math.max(footerLeft1.implicitHeight, actionsRow.implicitHeight)
+
+          Text {
+            id: footerLeft1
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            text: [root.versionShortName, root.attribution].filter(function(s) { return !!s }).join(" · ")
+            color: Qt.darker(root.contentForeground, 1.4)
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.bodySmall
+            elide: Text.ElideRight
+            width: Math.min(implicitWidth, parent.width - actionsRow.implicitWidth - Style.space(12))
+          }
+
+          Row {
+            id: actionsRow
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.space(16)
 
             Text {
-              id: headingText
-              text: root.strings.heading
-              color: palette.heading
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
+              text: root.strings.copy
+              color: copyArea.containsMouse ? Color.accent : Qt.darker(Color.accent, 1.15)
+              font.family: root.contentFontFamily
               font.pixelSize: Style.font.bodySmall
               font.bold: true
-              font.letterSpacing: 1.5
-            }
-
-            Text {
-              id: refreshGlyph
-              anchors.right: parent.right
-              anchors.verticalCenter: headingText.verticalCenter
-              text: root.loading ? "…" : "↻"
-              color: refreshArea.containsMouse ? palette.accentHover : palette.muted
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.body
 
               MouseArea {
-                id: refreshArea
+                id: copyArea
                 anchors.fill: parent
                 anchors.margins: -Style.space(6)
                 hoverEnabled: true
                 cursorShape: Qt.PointingHandCursor
-                onClicked: root.refresh()
+                enabled: root.verseText !== ""
+                onClicked: root.copyVerse()
+              }
+            }
+
+            Text {
+              text: root.strings.ask
+              color: askArea.containsMouse ? Color.accent : Qt.darker(Color.accent, 1.15)
+              font.family: root.contentFontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: true
+
+              MouseArea {
+                id: askArea
+                anchors.fill: parent
+                anchors.margins: -Style.space(6)
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                enabled: root.verseUrl !== ""
+                onClicked: root.openSource()
               }
             }
           }
+        }
 
-          // ---- Date ----------------------------------------------------
+        // ---- Footer row 2: data credit · plugin version -----------------
+        Item {
+          width: parent.width
+          height: footerLeft2.implicitHeight
+
           Text {
-            width: parent.width
-            text: new Date().toLocaleDateString(root.localeObj, Model.dateFormatFor(root.language))
-            color: palette.date
-            font.family: root.bar ? root.bar.fontFamily : Style.font.family
+            id: footerLeft2
+            anchors.left: parent.left
+            text: root.strings.dataVia + " midvash.com"
+            color: Qt.darker(root.contentForeground, 1.4)
+            font.family: root.contentFontFamily
             font.pixelSize: Style.font.bodySmall
           }
 
-          // ---- Reference -------------------------------------------------
           Text {
-            width: parent.width
-            text: root.reference || "…"
-            color: palette.reference
-            font.family: root.bar ? root.bar.fontFamily : Style.font.family
-            font.pixelSize: Style.font.heading
-            font.bold: true
-          }
-
-          // ---- Quote -----------------------------------------------------
-          Text {
-            width: parent.width
-            text: root.errorMessage
-              ? root.errorMessage
-              : (root.verseText ? ("“" + root.verseText + "”") : root.strings.loading)
-            color: palette.quote
-            wrapMode: Text.WordWrap
-            font.family: root.bar ? root.bar.fontFamily : Style.font.family
-            font.pixelSize: Style.font.body
-            lineHeight: 1.3
-          }
-
-          // ---- Separator ---------------------------------------------
-          Rectangle {
-            width: parent.width
-            height: 1
-            color: palette.separator
-          }
-
-          // ---- Footer row 1: version/attribution · COPY / ASK -----------
-          Item {
-            width: parent.width
-            height: Math.max(footerLeft1.implicitHeight, actionsRow.implicitHeight)
-
-            Text {
-              id: footerLeft1
-              anchors.left: parent.left
-              anchors.verticalCenter: parent.verticalCenter
-              text: [root.versionShortName, root.attribution].filter(function(s) { return !!s }).join(" · ")
-              color: palette.muted
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.bodySmall
-              elide: Text.ElideRight
-              width: Math.min(implicitWidth, parent.width - actionsRow.implicitWidth - Style.space(12))
-            }
-
-            Row {
-              id: actionsRow
-              anchors.right: parent.right
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(16)
-
-              Text {
-                text: root.strings.copy
-                color: copyArea.containsMouse ? palette.accentHover : palette.accent
-                font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                font.pixelSize: Style.font.bodySmall
-                font.bold: true
-
-                MouseArea {
-                  id: copyArea
-                  anchors.fill: parent
-                  anchors.margins: -Style.space(6)
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  enabled: root.verseText !== ""
-                  onClicked: root.copyVerse()
-                }
-              }
-
-              Text {
-                text: root.strings.ask
-                color: askArea.containsMouse ? palette.accentHover : palette.accent
-                font.family: root.bar ? root.bar.fontFamily : Style.font.family
-                font.pixelSize: Style.font.bodySmall
-                font.bold: true
-
-                MouseArea {
-                  id: askArea
-                  anchors.fill: parent
-                  anchors.margins: -Style.space(6)
-                  hoverEnabled: true
-                  cursorShape: Qt.PointingHandCursor
-                  enabled: root.verseUrl !== ""
-                  onClicked: root.openSource()
-                }
-              }
-            }
-          }
-
-          // ---- Footer row 2: data credit · plugin version ---------------
-          Item {
-            width: parent.width
-            height: footerLeft2.implicitHeight
-
-            Text {
-              id: footerLeft2
-              anchors.left: parent.left
-              text: root.strings.dataVia + " midvash.com"
-              color: palette.muted
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.bodySmall
-            }
-
-            Text {
-              anchors.right: parent.right
-              text: "v0.1.0"
-              color: palette.muted
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.bodySmall
-            }
+            anchors.right: parent.right
+            text: "v0.1.0"
+            color: Qt.darker(root.contentForeground, 1.4)
+            font.family: root.contentFontFamily
+            font.pixelSize: Style.font.bodySmall
           }
         }
       }

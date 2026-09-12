@@ -45,6 +45,19 @@ var LANGUAGES = {
 
 var DEFAULT_LANGUAGE = "es"
 
+// Native display names for the language picker.
+var LANGUAGE_LABELS = {
+  "es": "Español", "en": "English", "pt-br": "Português (Brasil)",
+  "pt-pt": "Português (Portugal)", "pt": "Português", "fr": "Français",
+  "de": "Deutsch", "it": "Italiano", "nl": "Nederlands", "sv": "Svenska",
+  "da": "Dansk", "nb": "Norsk", "pl": "Polski", "cs": "Čeština",
+  "hu": "Magyar", "ro": "Română", "ru": "Русский", "uk": "Українська",
+  "sr": "Српски", "tr": "Türkçe", "ar": "العربية", "he": "עברית",
+  "zh": "中文", "ko": "한국어", "ja": "日本語", "vi": "Tiếng Việt",
+  "id": "Bahasa Indonesia", "tl": "Tagalog", "sw": "Kiswahili",
+  "fi": "Suomi", "eo": "Esperanto", "la": "Latina"
+}
+
 // UI chrome strings (labels, buttons) — translated for the two languages
 // this plugin is built around; every other content language still gets
 // its verse text, book name, and date localized via Midvash/Qt, but falls
@@ -54,6 +67,7 @@ var STRINGS = {
     heading: "VERSÍCULO DEL DÍA",
     copy: "COPIAR",
     ask: "ABRIR",
+    refresh: "Actualizar",
     loading: "Cargando versículo…",
     error: "No se pudo cargar el versículo.",
     retry: "Reintentando…",
@@ -63,6 +77,7 @@ var STRINGS = {
     heading: "VERSE OF THE DAY",
     copy: "COPY",
     ask: "OPEN",
+    refresh: "Refresh",
     loading: "Loading verse…",
     error: "Couldn't load the verse.",
     retry: "Retrying…",
@@ -202,6 +217,45 @@ function buildReference(bookName, chapter, verseStart, verseEnd) {
   return parts.filter(Boolean).join(" ")
 }
 
+// { value, label } rows for the language Dropdown, sorted by native name.
+function languageOptions() {
+  var out = []
+  for (var code in LANGUAGES) {
+    out.push({ value: code, label: LANGUAGE_LABELS[code] || code })
+  }
+  out.sort(function(a, b) { return a.label < b.label ? -1 : (a.label > b.label ? 1 : 0) })
+  return out
+}
+
+// GET /v1/versions response -> a flat array of { slug, shortName, name,
+// language }, for filtering into per-language version options.
+function parseVersionsList(raw) {
+  try {
+    var rows = JSON.parse(String(raw || "")).data
+    if (!Array.isArray(rows)) return []
+    return rows.map(function(v) {
+      return {
+        slug: String(v.slug || ""),
+        shortName: String(v.shortName || v.slug || "").toUpperCase(),
+        name: String(v.name || ""),
+        language: String(v.language || "")
+      }
+    })
+  } catch (e) {
+    return []
+  }
+}
+
+// { value, label } rows for the version Dropdown, filtered to one language
+// and sorted by short name (e.g. "RVR1960 — Reina-Valera 1960").
+function versionOptionsForLanguage(list, language) {
+  var rows = (list || []).filter(function(v) { return v.language === language })
+  rows.sort(function(a, b) { return a.shortName < b.shortName ? -1 : (a.shortName > b.shortName ? 1 : 0) })
+  return rows.map(function(v) {
+    return { value: v.slug, label: v.name ? (v.shortName + " — " + v.name) : v.shortName }
+  })
+}
+
 // Single-quote a string for safe use inside a `bar.run("...")` shell
 // command (wraps in '...', escaping embedded single quotes).
 function shellQuote(value) {
@@ -212,6 +266,7 @@ if (typeof module !== "undefined") {
   module.exports = {
     LANGUAGES: LANGUAGES,
     DEFAULT_LANGUAGE: DEFAULT_LANGUAGE,
+    LANGUAGE_LABELS: LANGUAGE_LABELS,
     normalizeLanguage: normalizeLanguage,
     resolveLanguage: resolveLanguage,
     resolveVersion: resolveVersion,
@@ -224,6 +279,9 @@ if (typeof module !== "undefined") {
     parseVersionMeta: parseVersionMeta,
     formatVerseRange: formatVerseRange,
     buildReference: buildReference,
+    languageOptions: languageOptions,
+    parseVersionsList: parseVersionsList,
+    versionOptionsForLanguage: versionOptionsForLanguage,
     shellQuote: shellQuote
   }
 }
